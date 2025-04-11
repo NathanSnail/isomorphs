@@ -9,17 +9,20 @@ struct ColourKey {
     idx: usize,
 }
 
+const RESET: &'static str = "\x1B[0m";
+trait Colour: Clone {
+    fn ansify(&self) -> String;
+}
+
 #[derive(Copy, Clone)]
-pub struct Colour {
+pub struct RGB {
     pub r: u8,
     pub g: u8,
     pub b: u8,
 }
 
-impl Colour {
-    pub const RESET: &'static str = "\x1B[0m";
-
-    pub fn ansify(&self) -> String {
+impl Colour for RGB {
+    fn ansify(&self) -> String {
         "\x1B[38;2;".to_string()
             + &self.r.to_string()
             + ";"
@@ -28,7 +31,9 @@ impl Colour {
             + &self.b.to_string()
             + "m"
     }
+}
 
+impl RGB {
     pub fn from_hsl(h: f64, s: f64, l: f64) -> Self {
         let rgb = hsl::HSL { h, s, l }.to_rgb();
         Self {
@@ -39,19 +44,59 @@ impl Colour {
     }
 }
 
-pub struct ColorIterator {
+#[derive(Copy, Clone)]
+pub struct DiscordColour {
+    value: u8,
+}
+
+impl Colour for DiscordColour {
+    fn ansify(&self) -> String {
+        "\x1B[".to_string() + &self.value.to_string() + "m"
+    }
+}
+
+pub struct DiscordColourIterator {
     index: usize,
     total: usize,
 }
 
-impl ColorIterator {
+impl DiscordColourIterator {
     pub fn new(total: usize) -> Self {
         Self { index: 0, total }
     }
 }
 
-impl Iterator for ColorIterator {
-    type Item = Colour;
+impl Iterator for DiscordColourIterator {
+    type Item = DiscordColour;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.total {
+            return None;
+        }
+        self.index += 1;
+
+        let remainder = self.index % 8;
+        // TODO: consider bg combos
+
+        Some(DiscordColour {
+            value: remainder as u8 + 30,
+        })
+    }
+}
+
+pub struct RGBIterator {
+    index: usize,
+    total: usize,
+}
+
+impl RGBIterator {
+    pub fn new(total: usize) -> Self {
+        Self { index: 0, total }
+    }
+}
+
+impl Iterator for RGBIterator {
+    type Item = RGB;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.index >= self.total {
@@ -63,7 +108,7 @@ impl Iterator for ColorIterator {
 
         self.index += 1;
 
-        Some(Colour::from_hsl(hue, 0.9, 0.6))
+        Some(RGB::from_hsl(hue, 0.9, 0.6))
     }
 }
 
@@ -72,19 +117,19 @@ impl ColourKey {
         Self { idx: self.idx + 1 }
     }
 
-    pub fn reify(&self, table: &[Colour]) -> Colour {
-        table[self.idx % table.len()]
+    pub fn reify<T: Colour>(&self, table: &[T]) -> T {
+        table[self.idx % table.len()].clone()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ColouredString {
     word: String,
     colour: Option<ColourKey>,
 }
 
 impl ColouredString {
-    pub fn ansify(&self, table: &[Colour]) -> String {
+    pub fn ansify<T: Colour>(&self, table: &[T]) -> String {
         match self.colour {
             Some(colour) => colour.reify(table).ansify() + &self.word,
             None => self.word.clone(),
@@ -140,6 +185,8 @@ impl IsomorphManager {
                 }
             });
 
+        let mut colour_map: HashMap<Isomorph, ColourKey> = HashMap::new();
+
         let mut colour = ColourKey::default();
         let words = isomorphic_words
             .iter()
@@ -149,9 +196,16 @@ impl IsomorphManager {
                     None => unreachable!(),
                     Some(false) => None,
                     Some(true) => Some({
-                        let c = colour;
-                        colour = colour.next();
-                        c
+                        let col = match colour_map.get(e) {
+                            Some(c) => c.clone(),
+                            None => {
+                                let c = colour;
+                                colour = colour.next();
+                                colour_map.insert(e.clone(), c);
+                                c
+                            }
+                        };
+                        col
                     }),
                 },
             })
@@ -170,11 +224,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut buf = String::new();
     stdin.read_to_string(&mut buf)?;
 
-    let table = ColorIterator::new(1000).collect::<Vec<_>>();
+    // TODO: cli arg to swap
+    let table = DiscordColourIterator::new(1000).collect::<Vec<_>>(); //RGBIterator::new(1000).collect::<Vec<_>>();
     let coloured = IsomorphManager::colour(buf.split(' '))
         .iter()
         .map(|e| e.ansify(&table))
-        .map(|e| e + Colour::RESET)
+        .map(|e| e + RESET)
         .fold("".to_string(), |acc, e| acc + &e + " ");
 
     println!("{coloured}");
