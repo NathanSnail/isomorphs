@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
+    hash::Hash,
     io::{self, Read},
 };
 
@@ -122,33 +123,50 @@ impl ColourKey {
     }
 }
 
+/// Like a [`char`], if `T` is [`PossiblyIsomorphic`] then it must be possible to build part of a bijective function `T -> T` out of it (this is the isomorphism)
+trait PossiblyIsomorphic: Clone + Eq + Hash {}
+impl<T: Clone + Eq + Hash> PossiblyIsomorphic for T {}
+
+/// An object is a valid response if it can do some basic stuff, this trait is effectively a trait alias
+trait Response: Clone {}
+impl<T: Clone> Response for T {}
+
+/// Like a [`String`], `R` (the response) is the value which is used to identify this if it was isomorphic
+/// For a string where you wanted to find isomorphisms in overlapping windows you might have `T` = [`char`] and `R` = [`std::ops::Range`]
+struct IsomorphicHolder<T: PossiblyIsomorphic, R, I: Iterator<Item = T>> {
+    iter: I,
+    response: R,
+}
+
+/// An object which holds a response possibly coloured by it's isomorphisms
+/// If you just want to display it make sure `R`: [`ToString`] and use `ansify` on it
 #[derive(Clone, Debug)]
-struct ColouredString {
-    word: String,
+struct ColouredObject<R: Response> {
+    value: R,
     colour: Option<ColourKey>,
 }
 
-impl ColouredString {
-    pub fn ansify<T: Colour>(&self, table: &[T]) -> String {
+impl<R: Response + ToString> ColouredObject<R> {
+    pub fn ansify<U: Colour>(&self, table: &[U]) -> String {
         match self.colour {
-            Some(colour) => colour.reify(table).ansify() + &self.word,
-            None => self.word.clone(),
+            Some(colour) => colour.reify(table).ansify() + &self.value.to_string(),
+            None => self.value.to_string(),
         }
     }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone)]
-struct Isomorph {
+struct IsomorphSignature {
     good: bool,
     signature: Vec<u8>,
 }
 
-impl Isomorph {
-    pub fn from_str(word: &str) -> Self {
+impl IsomorphSignature {
+    pub fn from_isomorphic<T: PossiblyIsomorphic>(word: Vec<T>) -> Self {
         let mut signature = Vec::with_capacity(word.len());
         let mut char_map = HashMap::new();
         let mut idx = 0;
-        for char in word.chars() {
+        for char in word.iter() {
             if let Some(&idx) = char_map.get(&char) {
                 signature.push(idx);
             } else {
@@ -160,63 +178,67 @@ impl Isomorph {
 
         let good = signature.iter().collect::<HashSet<_>>().len() != signature.len();
 
-        Isomorph { signature, good }
+        IsomorphSignature { signature, good }
     }
 }
 
-struct IsomorphManager {
-    words: Vec<ColouredString>,
+struct IsomorphManager<T: PossiblyIsomorphic> {
+    words: Vec<ColouredObject<T>>,
 }
 
-impl IsomorphManager {
-    pub fn colour<'a, I: Iterator<Item = &'a str>>(words: I) -> Self {
-        let isomorphic_words = words
-            .map(|word| (word, Isomorph::from_str(word)))
-            .collect::<Vec<_>>();
+pub fn colour<
+    T: PossiblyIsomorphic,
+    R: Response,
+    I2: Iterator<Item = T>,
+    I: Iterator<Item = IsomorphicHolder<T, R, I2>>,
+>(
+    words: I,
+) -> Vec<ColouredObject<R>> {
+    let isomorphic_words = words
+        .map(|word| {
+            (
+                word.response,
+                IsomorphSignature::from_isomorphic(word.iter.collect()),
+            )
+        })
+        .collect::<Vec<_>>();
 
-        let mut counters = HashMap::new();
+    let mut counters = HashMap::new();
 
-        isomorphic_words
-            .iter()
-            .for_each(|(_, e)| match counters.get_mut(e) {
-                Some(x) => *x = e.good,
-                None => {
-                    counters.insert(e, false);
-                }
-            });
+    isomorphic_words
+        .iter()
+        .for_each(|(_, e)| match counters.get_mut(e) {
+            Some(x) => *x = e.good,
+            None => {
+                counters.insert(e, false);
+            }
+        });
 
-        let mut colour_map: HashMap<Isomorph, ColourKey> = HashMap::new();
+    let mut colour_map: HashMap<IsomorphSignature, ColourKey> = HashMap::new();
 
-        let mut colour = ColourKey::default();
-        let words = isomorphic_words
-            .iter()
-            .map(|(s, e)| ColouredString {
-                word: s.to_string(),
-                colour: match counters.get(e) {
-                    None => unreachable!(),
-                    Some(false) => None,
-                    Some(true) => Some({
-                        let col = match colour_map.get(e) {
-                            Some(c) => c.clone(),
-                            None => {
-                                let c = colour;
-                                colour = colour.next();
-                                colour_map.insert(e.clone(), c);
-                                c
-                            }
-                        };
-                        col
-                    }),
-                },
-            })
-            .collect();
-
-        Self { words }
-    }
-
-    pub fn iter<'a>(&'a mut self) -> impl Iterator<Item = &'a ColouredString> {
-        self.words.iter()
-    }
+    let mut colour = ColourKey::default();
+    isomorphic_words
+        .iter()
+        .map(|(s, e)| ColouredObject {
+            value: s.clone(),
+            colour: match counters.get(e) {
+                None => unreachable!(),
+                Some(false) => None,
+                Some(true) => Some({
+                    let col = match colour_map.get(e) {
+                        Some(c) => c.clone(),
+                        None => {
+                            let c = colour;
+                            colour = colour.next();
+                            colour_map.insert(e.clone(), c);
+                            c
+                        }
+                    };
+                    col
+                }),
+            },
+        })
+        .collect()
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -226,11 +248,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // TODO: cli arg to swap
     let table = DiscordColourIterator::new(1000).collect::<Vec<_>>(); //RGBIterator::new(1000).collect::<Vec<_>>();
-    let coloured = IsomorphManager::colour(buf.split(' '))
-        .iter()
-        .map(|e| e.ansify(&table))
-        .map(|e| e + RESET)
-        .fold("".to_string(), |acc, e| acc + &e + " ");
+    let coloured = colour(buf.split(' ').map(|e| IsomorphicHolder {
+        iter: e.chars(),
+        response: e,
+    }))
+    .into_iter()
+    .map(|e| e.ansify(&table))
+    .map(|e| e + RESET)
+    .fold("".to_string(), |acc, e| acc + &e + " ");
 
     println!("{coloured}");
 
