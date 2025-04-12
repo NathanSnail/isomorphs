@@ -183,6 +183,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut stdin = io::stdin();
     let mut buf = String::new();
     stdin.read_to_string(&mut buf)?;
+    buf = buf.replace('\n', "");
 
     let coloured = colour_isomorphs(buf.split(' ').map(|e| IsomorphicHolder {
         iter: e.chars(),
