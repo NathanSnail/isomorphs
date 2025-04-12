@@ -10,7 +10,7 @@ pub struct ColourKey {
     pub idx: usize,
 }
 
-const RESET: &'static str = "\x1B[0m";
+const RESET: &str = "\x1B[0m";
 pub trait Colour: Clone {
     fn ansify(&self) -> String;
 }
@@ -124,10 +124,6 @@ impl IsomorphSignature {
     }
 }
 
-struct IsomorphManager<T: PossiblyIsomorphic> {
-    words: Vec<ColouredObject<T>>,
-}
-
 pub fn colour_isomorphs<
     T: PossiblyIsomorphic,
     R: Response,
@@ -168,7 +164,7 @@ pub fn colour_isomorphs<
                 Some(false) => None,
                 Some(true) => Some({
                     let col = match colour_map.get(e) {
-                        Some(c) => c.clone(),
+                        Some(c) => *c,
                         None => {
                             let c = colour;
                             colour = colour.next();
